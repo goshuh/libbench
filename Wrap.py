@@ -12,14 +12,14 @@ from . import Item
 __all__ = ['Wrap', 'STrace', 'MTrace', 'Perf', 'NVProf', 'WSS', 'fmt_perf_tlb', 'fmt_wss']
 
 
-def float_div(a, b):
+def float_div(a: float, b: float) -> float:
     try:
         return a / b
     except ZeroDivisionError:
         return 0.0
 
 
-def fmt_perf_ldc(i: int, cs: str):
+def fmt_perf_ldc(i: int, cs: str) -> list[float]:
     sp = list(map(float, cs.split()))
     sp.append(sp[0] - sp[1]) # l1_miss
 
@@ -29,7 +29,7 @@ def fmt_perf_ldc(i: int, cs: str):
             float_div(sp[3], sp[2])]
 
 
-def fmt_perf_tlb(i: int, cs: str):
+def fmt_perf_tlb(i: int, cs: str) -> list[float]:
     sp = list(map(float, cs.split()))
     sp.append(sp[1] + sp[2]) # l1 tlb miss
 
@@ -40,7 +40,7 @@ def fmt_perf_tlb(i: int, cs: str):
             sp[3]]
 
 
-def fmt_wss(i, cs):
+def fmt_wss(i: int, cs: str) -> list[float]:
     sp = list(map(float, cs.split()))
 
     return [float(i),
@@ -96,20 +96,21 @@ class STrace(Wrap):
                 # only preliminary processing
                 ds = f'{mat.group(1)} {mat.group(5)} {func}'
 
-                if func == 'brk':
-                    ds += f' {mat.group(3)} {mat.group(4)}\n'
-                elif func == 'mmap':
-                    sz  = hex(int(args[1]))
-                    ds += f' {mat.group(4)} {sz}'
-                    ds += f'\n' if args[4] == '-1' else f' {args[4]} {args[5]}\n'
-                elif func == 'munmap':
-                    sz  = hex(int(args[1]))
-                    ds += f' {args[0]} {sz}\n'
-                elif func == 'mprotect':
-                    sz  = hex(int(args[1]))
-                    ds += f' {args[0]} {sz}\n'
-                else:
-                    ds +=  '\n'
+                match func:
+                    case 'brk:':
+                        ds += f' {mat.group(3)} {mat.group(4)}\n'
+                    case 'mmap':
+                        sz  = hex(int(args[1]))
+                        ds += f' {mat.group(4)} {sz}'
+                        ds += f'\n' if args[4] == '-1' else f' {args[4]} {args[5]}\n'
+                    case 'munmap':
+                        sz  = hex(int(args[1]))
+                        ds += f' {args[0]} {sz}\n'
+                    case 'mprotect':
+                        sz  = hex(int(args[1]))
+                        ds += f' {args[0]} {sz}\n'
+                    case _:
+                        ds +=  '\n'
 
                 fo.write(ds)
 
@@ -290,16 +291,17 @@ class NVProf(Wrap):
                     size = cs[ 86:95].strip()
                     name = cs[170:  ].strip()
 
-                    if   name == '[CUDA memcpy HtoD]':
-                        fo.write(f'memcpy(x, {size}, HtoD)\n')
-                    elif name == '[CUDA memcpy DtoH]':
-                        fo.write(f'memcpy(x, {size}, DtoH)\n')
-                    elif name == '[CUDA memcpy DtoD]':
-                        fo.write(f'memcpy(x, {size}, DtoD)\n')
-                    elif name == '[CUDA memset]':
-                        fo.write(f'memset(x, {size})\n')
-                    elif (mat := pat.match(name)):
-                        fo.write(f'{mat.group(0)}\n')
+                    match name:
+                        case '[CUDA memcpy HtoD]':
+                            fo.write(f'memcpy(x, {size}, HtoD)\n')
+                        case '[CUDA memcpy DtoH]':
+                            fo.write(f'memcpy(x, {size}, DtoH)\n')
+                        case '[CUDA memcpy DtoD]':
+                            fo.write(f'memcpy(x, {size}, DtoD)\n')
+                        case '[CUDA memset]':
+                            fo.write(f'memset(x, {size})\n')
+                        case _ if (mat := pat.match(name)):
+                            fo.write(f'{mat.group(0)}\n')
 
                 elif cs[0] == ' ':
                     pos = True

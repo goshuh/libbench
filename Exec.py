@@ -12,7 +12,7 @@ __all__ = ['Exec']
 
 class Exec(object):
 
-    def __init__(self, d: str = '', **kw):
+    def __init__(self, d: str = '', **kw: Any):
         self.__dict__.update(kw)
 
         self.dir  = os.path.abspath(d if d else 'out')
