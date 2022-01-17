@@ -85,48 +85,51 @@ class STrace(Wrap):
 
         os.waitpid(pid, 0)
 
-        with open(fn, 'r') as fi, open(fn + '.post', 'w') as fo:
-            for cs in fi:
-                if not (mat := STrace.pat.match(cs)):
-                    continue
-
-                func = mat.group(2)
-                args = mat.group(3).split(', ')
-
-                # only preliminary processing
-                ds = f'{mat.group(1)} {mat.group(5)} {func}'
-
-                match func:
-                    case 'brk:':
-                        ds += f' {mat.group(3)} {mat.group(4)}\n'
-                    case 'mmap':
-                        sz  = hex(int(args[1]))
-                        ds += f' {mat.group(4)} {sz}'
-                        ds += f'\n' if args[4] == '-1' else f' {args[4]} {args[5]}\n'
-                    case 'munmap':
-                        sz  = hex(int(args[1]))
-                        ds += f' {args[0]} {sz}\n'
-                    case 'mprotect':
-                        sz  = hex(int(args[1]))
-                        ds += f' {args[0]} {sz}\n'
-                    case _:
-                        ds +=  '\n'
-
-                fo.write(ds)
-
         # clear all
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
 
+        self.post(fn)
+
         return True
+
+    def post(self, fn: str) -> None:
+        brk = 0
+
+        with open(fn, 'r') as fi, open(fn + '.post', 'w') as fo:
+            for cs in fi:
+                if not (mat := STrace.pat.match(cs)):
+                    continue
+
+                utc  = mat.group(1)
+                func = mat.group(2)
+                args = mat.group(3).split(', ')
+                ret  = mat.group(4)
+
+                match func:
+                    case 'brk':
+                        new = int(ret, 16)
+                        if brk and (dif := new - brk):
+                            sig = '+' if dif > 0 else '-'
+                            fo.write(f'{sig} {utc} {abs(dif):x}\n')
+                        brk = new
+                    case 'mmap':
+                        fo.write(f'* {utc} {ret} {int(args[1]):x}\n')
+                    case 'munmap':
+                        fo.write(f'/ {utc} {args[0]} {int(args[1]):x}\n')
+                    case 'mremap':
+                        fo.write(f'/ {utc} {args[0]} {int(args[1]):x}\n')
+                        fo.write(f'* {utc} {ret} {int(args[2]):x}\n')
+                    case 'mprotect':
+                        fo.write(f'= {utc} {args[0]} {int(args[1]):x}\n')
 
 
 class MTrace(Wrap):
 
-    #                  @  bin   :  (func    )   [addr   ]  +/-    0xaddr   0xsize
-    pat = re.compile(r'@ ([^:]+):(\(([^)]+)\))?\[([^]]+)] ([+-]) (0x\w+)( (0x\w+))?')
+    #                  @  bin   :  (func    )   [addr   ]   +-<>    0xaddr   0xsize
+    pat = re.compile(r'@ ([^:]+):(\(([^)]+)\))?\[([^]]+)] ([+-<>]) (0x\w+)( (0x\w+))?')
 
     def __init__(self, *a: str, **kw: Any):
         super().__init__(*a, **kw)
@@ -145,24 +148,32 @@ class MTrace(Wrap):
 
         os.waitpid(pid, 0)
 
-        with open(fn, 'r') as fi, open(fn + '.post', 'w') as fo:
-            for cs in fi:
-                if not (mat := MTrace.pat.match(cs)):
-                    continue
-
-                # only preliminary processing
-                if mat.group(5) == '+':
-                    fo.write(f'+ {mat.group(6)} {mat.group(8)}\n')
-                else:
-                    fo.write(f'- {mat.group(6)}\n')
-
         # clear all
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
 
+        self.post(fn)
+
         return True
+
+    def post(self, fn: str) -> None:
+        dic = {}
+
+        with open(fn, 'r') as fi, open(fn + '.post', 'w') as fo:
+            for cs in fi:
+                if not (mat := MTrace.pat.match(cs)):
+                    continue
+
+                addr = mat.group(6)
+
+                match mat.group(5):
+                    case '+' | '>':
+                        fo.write(f'+ {addr} {mat.group(8)}\n')
+                        dic[addr] = mat.group(8)
+                    case '-' | '<':
+                        fo.write(f'- {addr} {dic[addr]}\n')
 
 
 class Perf(Wrap):
@@ -199,13 +210,13 @@ class Perf(Wrap):
             print(f'WARNING: Perf: simultaneously enabling {self.subs} events would lead to '
                             'PMC multiplexing and scaling, reducing accuracy')
 
-        pre = os.path.join(d, f'{i.case}-{m}-{n}-{self.name}')
+        fn = os.path.join(d, f'{i.case}-{m}-{n}-{self.name}.data')
 
         if len(self.subs):
             i.rt_args = ['perf',
                          'record',
                          '-F', str(self.freq),
-                         '-o', f'{pre}.data',
+                         '-o', fn,
                          '-e', ','.join(self.subs),
                          '--'] + i.rt_args
         else:
@@ -217,24 +228,35 @@ class Perf(Wrap):
 
         os.waitpid(pid, 0)
 
-        # spawn perf-script > self
+        # clear all
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+        self.post(fn)
+
+        return True
+
+    def post(self, fn: str) -> None:
         r, w = os.pipe()
 
         if (pid := os.fork()) == 0:
             args = ['perf',
                     'script',
-                    '-i', f'{pre}.data',
+                    '-i', fn,
                     '-F', '-comm,-tid,-ip']
             os.close (r)
             os.dup2  (w, 1)
             os.execvp(args[0], args)
 
         os.close(w)
-
+        
         prv =  None
         nil = {e: 0 for e in self.subs}
         num = {e: 0 for e in self.subs}
-        with os.fdopen(r, 'r') as fi, open(f'{pre}.log', 'w') as fds:
+
+        with os.fdopen(r, 'r') as fi, open(f'{fn}.post', 'w') as fds:
             for cs in fi:
                 sp  = cs.split()
                 cur = float(sp[0][:-1])
@@ -249,16 +271,15 @@ class Perf(Wrap):
                     fds.write(' '.join(map(str, num.values())) + '\n')
                     num.update(nil)
 
-        # clear all
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
 
-        return True
-
 
 class NVProf(Wrap):
+
+    pat = re.compile(r'\S+\([^\)]+\)')
 
     def __init__(self, *a: str, **kw: Any):
         super().__init__(*a, **kw)
@@ -279,8 +300,18 @@ class NVProf(Wrap):
 
         os.waitpid(pid, 0)
 
+        # clear all
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+        self.post(fn)
+
+        return True
+
+    def post(self, fn: str) -> None:
         pos = False
-        pat = re.compile(r'\S+\([^\)]+\)')
 
         with open(fn, 'r') as fi, open(fn + '.post', 'w') as fo:
             for cs in fi:
@@ -300,19 +331,11 @@ class NVProf(Wrap):
                             fo.write(f'memcpy(x, {size}, DtoD)\n')
                         case '[CUDA memset]':
                             fo.write(f'memset(x, {size})\n')
-                        case _ if (mat := pat.match(name)):
+                        case _ if (mat := NVProf.pat.match(name)):
                             fo.write(f'{mat.group(0)}\n')
 
                 elif cs[0] == ' ':
                     pos = True
-
-        # clear all
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-
-        return True
 
 
 class WSS(Wrap):
@@ -347,9 +370,9 @@ class WSS(Wrap):
         # floats
         fds = {t: open(os.path.join(d, f'{i.case}-{m}-{n}-wss-{t * self.dly:.2f}.log'), 'w')
                   for t in gen(1 / self.dly if self.prof else 2)}
-
         cnt = 0
         dly = self.dly
+
         while self.max < 0 or cnt < self.max:
             cnt += 1
             dif  = dly
