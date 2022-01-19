@@ -128,8 +128,8 @@ class STrace(Wrap):
 
 class MTrace(Wrap):
 
-    #                  @  bin   :  (func    )   [addr   ]   +-<>    0xaddr   0xsize
-    pat = re.compile(r'@ ([^:]+):(\(([^)]+)\))?\[([^]]+)] ([+-<>]) (0x\w+)( (0x\w+))?')
+    #                   ttt        func (args    )  =  ret
+    pat = re.compile(r'(\d+\.\d+) (\w+)\(([^)]+)\)( = (\w+))?')
 
     def __init__(self, *a: str, **kw: Any):
         super().__init__(*a, **kw)
@@ -166,14 +166,27 @@ class MTrace(Wrap):
                 if not (mat := MTrace.pat.match(cs)):
                     continue
 
-                addr = mat.group(6)
+                utc  = mat.group(1)
+                func = mat.group(2)
+                args = mat.group(3).split(', ')
+                ret  = mat.group(5)
 
-                match mat.group(5):
-                    case '+' | '>':
-                        fo.write(f'+ {addr} {mat.group(8)}\n')
-                        dic[addr] = mat.group(8)
-                    case '-' | '<':
-                        fo.write(f'- {addr} {dic[addr]}\n')
+                match func:
+                    case 'free':
+                        if args[0] != '0':
+                            fo.write(f'- {utc} {args[0]} {dic.pop(args[0])}\n')
+                    case 'malloc':
+                        fo.write(f'+ {utc} {ret} {args[0]}\n')
+                        dic[ret] = args[0]
+                    case 'calloc':
+                        sz = int(args[0], 16) * int(args[1], 16)
+                        fo.write(f'+ {utc} {ret} {sz:x}\n')
+                        dic[ret] = f'{sz:x}'
+                    case 'realloc':
+                        if args[0] != '0':
+                            fo.write(f'- {utc} {args[0]} {dic.pop(args[0])}\n')
+                        fo.write(f'+ {utc} {ret} {args[1]}\n')
+                        dic[ret] = args[1]
 
 
 class Perf(Wrap):
@@ -279,7 +292,7 @@ class Perf(Wrap):
 
 class NVProf(Wrap):
 
-    pat = re.compile(r'\S+\([^\)]+\)')
+    pat = re.compile(r'\w+\([^\)]+\)')
 
     def __init__(self, *a: str, **kw: Any):
         super().__init__(*a, **kw)
