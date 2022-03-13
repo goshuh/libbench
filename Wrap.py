@@ -6,10 +6,13 @@ import re
 import time
 import signal
 
+import bcc
+import pickle
+
 from . import Item
 
 
-__all__ = ['Wrap', 'STrace', 'MTrace', 'Perf', 'NVProf', 'WSS', 'fmt_perf_tlb', 'fmt_wss']
+__all__ = ['Wrap', 'STrace', 'MTrace', 'Perf', 'NVProf', 'WSS', 'BPF', 'fmt_perf_tlb', 'fmt_wss']
 
 
 def float_div(a: float, b: float) -> float:
@@ -85,7 +88,7 @@ class STrace(Wrap):
 
         os.waitpid(pid, 0)
 
-        # clear all
+        # clean up
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -148,7 +151,7 @@ class MTrace(Wrap):
 
         os.waitpid(pid, 0)
 
-        # clear all
+        # clean up
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -241,7 +244,7 @@ class Perf(Wrap):
 
         os.waitpid(pid, 0)
 
-        # clear all
+        # clean up
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -264,7 +267,7 @@ class Perf(Wrap):
             os.execvp(args[0], args)
 
         os.close(w)
-        
+
         prv =  None
         nil = {e: 0 for e in self.subs}
         num = {e: 0 for e in self.subs}
@@ -313,7 +316,7 @@ class NVProf(Wrap):
 
         os.waitpid(pid, 0)
 
-        # clear all
+        # clean up
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -436,7 +439,7 @@ class WSS(Wrap):
             if dly > 1 or not self.prof:
                 dly  = self.dly
 
-        # clear all
+        # clean up
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -446,3 +449,111 @@ class WSS(Wrap):
             f.close()
 
         return True
+
+
+class BPF(Wrap):
+
+    root = os.path.dirname(__file__)
+
+    def __init__(self, *a: str, **kw: Any):
+        super().__init__(*a, **kw)
+        self.name      = 'bpf'
+        self.stop      =  1
+        self.prog      = ''
+        self.kprobe    = {}
+        self.kretprobe = {}
+
+        self.__dict__.update(kw)
+
+        if self.prog and not os.path.isfile(self.prog):
+            self.prog = os.path.join(BPF.root, self.prog)
+
+    def __call__(self, i: Item, d: str, m: int, n: int) -> bool:
+        fn = os.path.join(d, f'{i.case}-{m}-{n}-{self.name}.log')
+
+        if not self.prog:
+            print('WARNING: BPF: no program specified')
+            return True
+
+        if (pid := os.fork()) == 0:
+            return False
+
+        # stop it first
+        if self.stop:
+            os.kill(pid, signal.SIGSTOP);
+
+        # signal doesn't work for the elevated process
+        fr, fw = os.pipe()
+        br, bw = os.pipe()
+
+        if not os.fork():
+            os.close(fw)
+            os.close(br)
+            os.dup2 (fr, 0)
+            os.dup2 (bw, 1)
+
+            # elevate
+            os.execlp('sudo',
+                      'sudo',
+                      '--preserve-env=PYTHONPATH',
+                       os.path.join(BPF.root, 'BPF.py'))
+
+        os.close(fr)
+        os.close(bw)
+
+        # send self and handshake
+        buf = pickle.dumps(self)
+
+        os.write(fw, len(buf).to_bytes(4, 'little'))
+        os.write(fw, buf)
+        os.read (br, 1)
+
+        if self.stop:
+            os.kill(pid, signal.SIGCONT);
+
+        os.waitpid(pid, 0);
+
+        # clean up
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+        # stop the elevated process
+        os.write(fw, b'\0')
+        os.close(fw)
+
+        # dump results
+        with open(fn, 'wb') as fd:
+            while True:
+                if buf := os.read(br, 4096):
+                    fd.write(buf)
+                else:
+                    break
+        os.close(br)
+
+        return True
+
+    def priv(self) -> None:
+        bpf = bcc.BPF(src_file = self.prog.encode('utf-8'))
+
+        for k, v in self.kprobe   .items():
+            bpf.attach_kprobe   (event = k, fn_name = v)
+        for k, v in self.kretprobe.items():
+            bpf.attach_kretprobe(event = k, fn_name = v)
+
+        # addiitonal logic
+        self.init(bpf)
+
+        # handshake
+        os.write(1, b'\0')
+        os.read (0, 1)
+
+        # output
+        self.post(bpf)
+
+    def init(self, bpf: bcc.BPF) -> None:
+        pass
+
+    def post(self, bpf: bcc.BPF) -> None:
+        pass
