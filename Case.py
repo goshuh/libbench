@@ -1,12 +1,9 @@
 from __future__ import annotations
 from   typing   import Any
 
-from . import Exec
-from . import Item
-from . import Pipe
-
-
-__all__ = ['Case']
+from .Exec import Exec
+from .Item import Item
+from .Pipe import Pipe
 
 
 class Case(object):
@@ -19,7 +16,7 @@ class Case(object):
         self.subs = []
 
     def __iadd__(self, i: Item) -> Case:
-        self.subs.append(Pipe.Pipe(self, i))
+        self.subs.append(Pipe(self, i))
         return self
 
     def __repr__(self) -> str:

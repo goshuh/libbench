@@ -5,10 +5,7 @@ import os
 import sys
 import shlex
 
-from . import Case
-
-
-__all__ = ['Item']
+from .Case import Case
 
 
 class Item(object):

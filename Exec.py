@@ -3,11 +3,8 @@ from   typing   import Any
 
 import os
 
-from . import Case
-from . import Item
-
-
-__all__ = ['Exec']
+from .Case import Case
+from .Item import Item
 
 
 class Exec(object):
@@ -35,18 +32,18 @@ class Exec(object):
         return self
 
     def case(self, n: str, **kw: Any) -> Exec:
-        self.subs.append(Case.Case(self, n, **kw))
+        self.subs.append(Case(self, n, **kw))
         return self
 
     def item(self, a: str, **kw: Any) -> Exec:
         case  = self.subs[-1]
-        case += Item.Item(case, a, **kw)
+        case += Item(case, a, **kw)
         return self
 
     def pipe(self, a: str, **kw: Any) -> Exec:
         case  = self.subs[-1]
         pipe  = case.subs[-1]
-        pipe += Item.Item(case, a, **kw)
+        pipe += Item(case, a, **kw)
         return self
 
     def done(self, *c: str) -> None:
